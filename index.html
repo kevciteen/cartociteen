@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Carte interactive – DPE / DVF / Copro</title>
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* Panneau de gauche (menu) */
+    #sidebar {
+      width: 300px;
+      padding: 12px;
+      border-right: 1px solid #ddd;
+      background: #f8f8f8;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #sidebar h1 {
+      font-size: 18px;
+      margin: 0 0 4px 0;
+    }
+
+    #sidebar h2 {
+      font-size: 14px;
+      margin: 8px 0 4px 0;
+    }
+
+    label {
+      font-size: 13px;
+    }
+
+    select,
+    input[type="file"],
+    button {
+      width: 100%;
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    button {
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+
+    /* Carte */
+    #map {
+      flex: 1;
+      height: 100vh;
+    }
+
+    .layer-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .note {
+      font-size: 11px;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1>Carte patrimoine</h1>
+    <p class="note">
+      Exemple de carte interactive avec couches et import CSV (DPE, DVF, copro…).
+    </p>
+
+    <h2>Afficher / masquer les couches</h2>
+    <div>
+      <div class="layer-checkbox">
+        <input type="checkbox" id="toggleDPE" checked />
+        <label for="toggleDPE">DPE</label>
+      </div>
+      <div class="layer-checkbox">
+        <input type="checkbox" id="toggleDVF" checked />
+        <label for="toggleDVF">DVF</label>
+      </div>
+      <div class="layer-checkbox">
+        <input type="checkbox" id="toggleCopro" checked />
+        <label for="toggleCopro">Copropriétés</label>
+      </div>
+    </div>
+
+    <h2>Importer un CSV</h2>
+    <label for="layerType">Type de données :</label>
+    <select id="layerType">
+      <option value="dpe">DPE</option>
+      <option value="dvf">DVF</option>
+      <option value="copro">Registre des copropriétés</option>
+    </select>
+
+    <label for="csvFile">Fichier CSV :</label>
+    <input type="file" id="csvFile" accept=".csv" />
+
+    <button id="loadCsvBtn">Charger le CSV</button>
+
+    <p class="note">
+      Le CSV doit contenir des colonnes de coordonnées, par exemple :
+      <code>lat,lng,adresse,valeur</code><br />
+      (Les noms possibles pour coord. : <code>lat, latitude</code> et
+      <code>lng, lon, longitude</code>)
+    </p>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <!-- PapaParse pour lire les CSV -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+    // 1. Initialisation de la carte
+    const map = L.map("map").setView([46.6, 2.5], 6); // centre France
+
+    // 2. Fonds de carte
+    const osmLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map);
+
+    // (Tu peux ajouter d'autres fonds de carte ici, ex. cartes noir & blanc, etc.)
+
+    // 3. Couches de données (DPE / DVF / Copro)
+    const dpeLayer = L.layerGroup().addTo(map);
+    const dvfLayer = L.layerGroup().addTo(map);
+    const coproLayer = L.layerGroup().addTo(map);
+
+    const overlays = {
+      "DPE": dpeLayer,
+      "DVF": dvfLayer,
+      "Copropriétés": coproLayer,
+    };
+
+    // Contrôle classique Leaflet pour les couches (comme dans Géoportail)
+    L.control.layers({ "OpenStreetMap": osmLayer }, overlays).addTo(map);
+
+    // 4. Gestion des cases à cocher dans le menu
+    document.getElementById("toggleDPE").addEventListener("change", (e) => {
+      if (e.target.checked) {
+        map.addLayer(dpeLayer);
+      } else {
+        map.removeLayer(dpeLayer);
+      }
+    });
+
+    document.getElementById("toggleDVF").addEventListener("change", (e) => {
+      if (e.target.checked) {
+        map.addLayer(dvfLayer);
+      } else {
+        map.removeLayer(dvfLayer);
+      }
+    });
+
+    document.getElementById("toggleCopro").addEventListener("change", (e) => {
+      if (e.target.checked) {
+        map.addLayer(coproLayer);
+      } else {
+        map.removeLayer(coproLayer);
+      }
+    });
+
+    // 5. Fonction utilitaire : trouver les champs lat/lon dans le CSV
+    function getLatLngFromRow(row) {
+      const latKeys = ["lat", "latitude", "Lat", "Latitude"];
+      const lngKeys = ["lng", "lon", "longitude", "Lng", "Lon", "Longitude"];
+
+      let lat = null;
+      let lng = null;
+
+      for (const k of latKeys) {
+        if (row[k] !== undefined && row[k] !== "") {
+          lat = parseFloat(row[k]);
+          break;
+        }
+      }
+      for (const k of lngKeys) {
+        if (row[k] !== undefined && row[k] !== "") {
+          lng = parseFloat(row[k]);
+          break;
+        }
+      }
+
+      if (!isFinite(lat) || !isFinite(lng)) {
+        return null;
+      }
+      return [lat, lng];
+    }
+
+    // 6. Import CSV et ajout sur la carte
+    document.getElementById("loadCsvBtn").addEventListener("click", () => {
+      const fileInput = document.getElementById("csvFile");
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("Merci de sélectionner un fichier CSV.");
+        return;
+      }
+
+      const layerType = document.getElementById("layerType").value;
+      let targetLayer;
+
+      if (layerType === "dpe") targetLayer = dpeLayer;
+      else if (layerType === "dvf") targetLayer = dvfLayer;
+      else if (layerType === "copro") targetLayer = coproLayer;
+      else targetLayer = dpeLayer;
+
+      // On vide la couche avant de recharger
+      targetLayer.clearLayers();
+
+      Papa.parse(file, {
+        header: true,
+        dynamicTyping: true,
+        complete: (results) => {
+          const data = results.data;
+          const bounds = [];
+
+          data.forEach((row) => {
+            const coord = getLatLngFromRow(row);
+            if (!coord) return;
+
+            // Préparation du contenu de popup (simple)
+            const popupLines = [];
+            for (const key in row) {
+              if (row[key] !== null && row[key] !== "") {
+                popupLines.push(`<strong>${key}</strong> : ${row[key]}`);
+              }
+            }
+
+            const marker = L.circleMarker(coord, {
+              radius: 5,
+            }).bindPopup(popupLines.join("<br/>"));
+
+            marker.addTo(targetLayer);
+            bounds.push(coord);
+          });
+
+          if (bounds.length > 0) {
+            map.fitBounds(bounds);
+          } else {
+            alert("Aucun point valide trouvé dans le CSV (vérifie les colonnes lat/lon).");
+          }
+        },
+        error: (err) => {
+          console.error(err);
+          alert("Erreur lors de la lecture du CSV.");
+        },
+      });
+    });
+  </script>
+</body>
+</html>
